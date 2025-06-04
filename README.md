@@ -1,5 +1,3 @@
-# Complete README in Markdown
-
 ```markdown
 # PullSense 🔍
 
