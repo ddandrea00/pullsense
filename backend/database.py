@@ -1,6 +1,8 @@
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import Column, Integer, String, Text, DateTime, JSON, Float, ForeignKey
+from sqlalchemy.orm import relationship
 from datetime import datetime
 
 # SQLite for quick start (we'll migrate to PostgreSQL later)
@@ -45,6 +47,25 @@ class PullRequest(Base):
     # When WE received this webhook (not when PR was created)
     # default= means SQLAlchemy automatically sets this
 
+class CodeReview(Base):
+    __tablename__ = "code_reviews"
+    
+    id = Column(Integer, primary_key=True)
+    pull_request_id = Column(Integer, ForeignKey("pull_requests.id"))
+    
+    # Analysis results from AI
+    analysis_text = Column(Text)  # The main analysis
+    analysis_status = Column(String)  # 'completed', 'error', 'mock'
+    model_used = Column(String)  # Which AI model was used
+    
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
+    analysis_time_seconds = Column(Float)  # How long analysis took
+    
+    # Relationship back to PR
+    pull_request = relationship("PullRequest", backref="reviews")
+    
+    
 # Create the actual database tables
 Base.metadata.create_all(bind=engine)
 # This reads all classes that inherit from Base and creates their tables
