@@ -1,15 +1,34 @@
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware  
 from celery_app import analyze_pr_task, test_task
 from pydantic import BaseModel
 from datetime import datetime
 from database import SessionLocal, PullRequest
 from database import CodeReview
 from sqlalchemy.orm import joinedload
+from config import settings  
+from services.github_service import github_service
+
 import json
 import os
 
 
 app = FastAPI(title="PullSense API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",  # React default
+        "http://localhost:5173",  # Vite default
+        "http://localhost:5174",  # Vite alternate
+        "http://127.0.0.1:5173",  # Alternative localhost
+        "http://localhost:4173",  # Vite preview
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # In-memory storage for now (we'll add database later)
 webhooks_received = []
@@ -250,3 +269,9 @@ def get_dashboard():
         }
     finally:
         db.close()
+        
+        
+@app.get("/github/rate-limit")
+def get_github_rate_limit():
+    """Check GitHub API rate limit status"""
+    return github_service.get_rate_limit()

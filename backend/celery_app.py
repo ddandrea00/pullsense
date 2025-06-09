@@ -6,6 +6,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from celery import Celery
 from config import settings
+from services.github_service import github_service
+
 
 # Create Celery application
 app = Celery('pullsense', broker=settings.REDIS_URL)
@@ -20,6 +22,7 @@ app.conf.update(
 )
 
 @app.task
+@app.task
 def analyze_pr_task(pr_id: int):
     """
     Background task to analyze a pull request.
@@ -33,6 +36,7 @@ def analyze_pr_task(pr_id: int):
     # Import here to avoid circular imports
     from database import SessionLocal, PullRequest, CodeReview
     from services.ai_analyzer import analyzer
+    from services.github_service import github_service
     
     db = SessionLocal()
     try:
@@ -44,17 +48,29 @@ def analyze_pr_task(pr_id: int):
         
         print(f"📝 Analyzing PR #{pr.pr_number}: {pr.title}")
         
-        # Perform AI analysis
+        # Try to get real diff from GitHub
+        diff_data = None
+        if pr.repo_name and pr.pr_number:
+            print(f"🔍 Fetching diff from GitHub for {pr.repo_name} PR #{pr.pr_number}")
+            diff_data = github_service.get_pr_diff(pr.repo_name, pr.pr_number)
+            if diff_data:
+                print(f"✅ Got diff: {diff_data['changed_files']} files changed")
+                print(f"📊 +{diff_data['additions']} -{diff_data['deletions']} lines")
+            else:
+                print("⚠️  Could not fetch diff from GitHub")
+        
+        # Perform AI analysis with diff data
         result = analyzer.analyze_pr({
             "title": pr.title,
             "body": pr.raw_data.get("pull_request", {}).get("body", ""),
-            "author": pr.author
+            "author": pr.author,
+            "diff_data": diff_data  # Pass the GitHub diff data
         })
         
-        # Calculate time taken
+        # Calculate processing time
         analysis_time = time.time() - start_time
         
-        # Save to database
+        # Save analysis results to database
         review = CodeReview(
             pull_request_id=pr.id,
             analysis_text=result.get("analysis", "No analysis generated"),
@@ -65,7 +81,7 @@ def analyze_pr_task(pr_id: int):
         
         db.add(review)
         db.commit()
-        db.refresh(review)
+        db.refresh(review)  # Get the generated ID
         
         print(f"💾 Saved analysis to database with ID: {review.id}")
         print(f"✅ Analysis complete for PR {pr_id} in {analysis_time:.2f} seconds")
@@ -74,15 +90,16 @@ def analyze_pr_task(pr_id: int):
             "status": "success",
             "review_id": review.id,
             "pr_id": pr_id,
-            "time_taken": analysis_time
+            "time_taken": analysis_time,
+            "used_github_diff": diff_data is not None
         }
         
     except Exception as e:
         print(f"❌ Error analyzing PR {pr_id}: {e}")
-        db.rollback()
+        db.rollback()  # Undo any partial changes
         return {"status": "error", "error": str(e)}
     finally:
-        db.close()
+        db.close()  # Always cleanup database connection
 
 @app.task
 def test_task(message: str = "Hello"):
