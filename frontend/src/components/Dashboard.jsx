@@ -1,4 +1,3 @@
-import React from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
@@ -34,7 +33,6 @@ const StatusBadge = ({ status }) => {
 const Dashboard = () => {
   const queryClient = useQueryClient();
 
-  // Fetch dashboard data
   const {
     data: dashboard,
     isLoading,
@@ -42,7 +40,6 @@ const Dashboard = () => {
   } = useQuery({
     queryKey: ["dashboard"],
     queryFn: api.getDashboard,
-    refetchInterval: 5000,
   });
 
   // Fetch stats

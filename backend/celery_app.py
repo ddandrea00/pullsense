@@ -6,8 +6,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from celery import Celery
 from config import settings
-from services.github_service import github_service
-
+import asyncio
+import json
 
 # Create Celery application
 app = Celery('pullsense', broker=settings.REDIS_URL)
@@ -21,7 +21,26 @@ app.conf.update(
     enable_utc=True,
 )
 
-@app.task
+def broadcast_analysis_complete(pr_id: int, status: str):
+    """Broadcast analysis completion to WebSocket clients."""
+    try:
+        # Import here to avoid circular imports
+        import redis
+        from config import settings
+        
+        # Use Redis to publish the message
+        r = redis.from_url(settings.REDIS_URL)
+        message = {
+            "type": "analysis_complete",
+            "data": {
+                "pr_id": pr_id,
+                "status": status
+            }
+        }
+        r.publish("websocket_updates", json.dumps(message))
+    except Exception as e:
+        print(f"❌ Failed to broadcast update: {e}")
+
 @app.task
 def analyze_pr_task(pr_id: int):
     """
@@ -86,6 +105,9 @@ def analyze_pr_task(pr_id: int):
         print(f"💾 Saved analysis to database with ID: {review.id}")
         print(f"✅ Analysis complete for PR {pr_id} in {analysis_time:.2f} seconds")
         
+        # Broadcast completion to WebSocket clients
+        broadcast_analysis_complete(pr_id, "completed")
+        
         return {
             "status": "success",
             "review_id": review.id,
@@ -97,6 +119,10 @@ def analyze_pr_task(pr_id: int):
     except Exception as e:
         print(f"❌ Error analyzing PR {pr_id}: {e}")
         db.rollback()  # Undo any partial changes
+        
+        # Broadcast error status
+        broadcast_analysis_complete(pr_id, "error")
+        
         return {"status": "error", "error": str(e)}
     finally:
         db.close()  # Always cleanup database connection

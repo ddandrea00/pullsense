@@ -1,10 +1,7 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON, Float, ForeignKey, Boolean
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import Column, Integer, String, Text, DateTime, JSON, Float, ForeignKey
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
-
 # SQLite for quick start (we'll migrate to PostgreSQL later)
 engine = create_engine("sqlite:///./pullsense.db")
 # Why SQLite? No setup needed - just a file. Perfect for development.
@@ -64,7 +61,19 @@ class CodeReview(Base):
     
     # Relationship back to PR
     pull_request = relationship("PullRequest", backref="reviews")
+
+class User(Base):
+    __tablename__ = "users"
     
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    username = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    is_active = Column(Boolean, default=True)
+    is_superuser = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, onupdate=datetime.utcnow)
+
     
 # Create the actual database tables
 Base.metadata.create_all(bind=engine)

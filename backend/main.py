@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware  
 from celery_app import analyze_pr_task, test_task
 from pydantic import BaseModel
@@ -8,10 +8,49 @@ from database import CodeReview
 from sqlalchemy.orm import joinedload
 from config import settings  
 from services.github_service import github_service
+from typing import List
+
 
 import json
 import os
+import asyncio
 
+
+class ConnectionManager:
+    """Manages WebSocket connections for real-time updates."""
+    
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+    
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        print(f"📡 WebSocket connected. Total: {len(self.active_connections)}")
+    
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        print(f"📡 WebSocket disconnected. Total: {len(self.active_connections)}")
+    
+    async def broadcast(self, message: dict):
+        """Send message to all connected clients."""
+        if not self.active_connections:
+            return
+        
+        message_str = json.dumps(message)
+        disconnected = []
+        
+        for connection in self.active_connections:
+            try:
+                await connection.send_text(message_str)
+            except:
+                disconnected.append(connection)
+        
+        # Clean up disconnected clients
+        for connection in disconnected:
+            self.disconnect(connection)
+
+manager = ConnectionManager()
 
 app = FastAPI(title="PullSense API")
 
@@ -53,7 +92,6 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
 
 
-# Update your webhook endpoint to use background processing
 @app.post("/webhook/github")
 async def github_webhook(request: Request):
     event_type = request.headers.get("X-GitHub-Event", "unknown")
@@ -65,7 +103,6 @@ async def github_webhook(request: Request):
         pr = payload.get("pull_request", {})
         repo = payload.get("repository", {})
         
-        # Save to database (existing code)
         db = SessionLocal()
         try:
             db_pr = PullRequest(
@@ -82,7 +119,6 @@ async def github_webhook(request: Request):
             
             print(f"💾 Saved PR #{pr.get('number')} to database")
             
-            # NEW: Trigger background analysis for opened/updated PRs
             if payload.get("action") in ["opened", "synchronize"]:
                 print(f"🤖 Queuing AI analysis for PR {db_pr.id}")
                 analyze_pr_task.delay(db_pr.id)
@@ -90,13 +126,23 @@ async def github_webhook(request: Request):
         finally:
             db.close()
     
-    # Store in memory (existing code)
     webhook_data = {
         "timestamp": datetime.now().isoformat(),
         "event_type": event_type,
         "payload": payload
     }
     webhooks_received.append(webhook_data)
+    
+    if event_type == "pull_request" and payload.get("action") == "opened":
+        await manager.broadcast({
+            "type": "pr_created",
+            "data": {
+                "pr_id": db_pr.id,
+                "pr_number": db_pr.pr_number,
+                "title": db_pr.title,
+                "status": "pending"
+            }
+    })
     
     return {"status": "received", "event": event_type}
 
@@ -275,3 +321,16 @@ def get_dashboard():
 def get_github_rate_limit():
     """Check GitHub API rate limit status"""
     return github_service.get_rate_limit()
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            # Keep connection alive
+            data = await websocket.receive_text()
+            # Echo back or handle client messages
+            await websocket.send_text(f"Message received: {data}")
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
