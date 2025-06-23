@@ -334,3 +334,97 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.send_text(f"Message received: {data}")
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+        
+        
+@app.post("/analyze-code")
+async def analyze_code(request: Request):
+    """
+    Analyze code directly from VS Code extension
+    """
+    try:
+        data = await request.json()
+        code = data.get("code", "")
+        file_name = data.get("fileName", "unknown")
+        language = data.get("language", "unknown")
+        mode = data.get("mode", "full")  # full or quick
+        
+        if not code:
+            raise HTTPException(status_code=400, detail="No code provided")
+        
+        print(f"🔍 Analyzing {mode} code from VS Code: {file_name} ({language})")
+        
+        # Create a more appropriate analysis prompt for individual files
+        if mode == "quick":
+            analysis_prompt = f"""
+            Analyze this {language} code for quick feedback:
+            
+            File: {file_name}
+            Code:
+            ```{language}
+            {code}
+            ```
+            
+            Provide 2-3 quick suggestions for:
+            - Code improvements
+            - Potential issues
+            - Best practices
+            
+            Keep response concise and actionable.
+            """
+        else:
+            analysis_prompt = f"""
+            Analyze this {language} code:
+            
+            File: {file_name}
+            Code:
+            ```{language}
+            {code}
+            ```
+            
+            Provide specific feedback on:
+            1. Code quality and structure
+            2. Potential bugs or issues
+            3. Security considerations
+            4. Performance improvements
+            5. Best practices for {language}
+            
+            Be specific and reference actual code when possible.
+            """
+        
+        # Call OpenAI directly for file analysis
+        from services.ai_analyzer import analyzer
+        if hasattr(analyzer, 'client') and analyzer.client:
+            response = analyzer.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": f"You are an expert {language} developer providing code review feedback."
+                    },
+                    {
+                        "role": "user", 
+                        "content": analysis_prompt
+                    }
+                ],
+                max_tokens=400 if mode == "quick" else 800,
+                temperature=0.3
+            )
+            
+            analysis = response.choices[0].message.content
+        else:
+            # Fallback for when no OpenAI key
+            analysis = f"Mock analysis for {file_name}:\n- Code structure looks good\n- Consider adding error handling\n- Variable naming could be improved"
+        
+        return {
+            "status": "success",
+            "analysis": analysis,
+            "model": "gpt-3.5-turbo" if hasattr(analyzer, 'client') and analyzer.client else "mock",
+            "fileName": file_name,
+            "language": language,
+            "mode": mode
+        }
+        
+    except Exception as e:
+        print(f"❌ Error analyzing code: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+      
